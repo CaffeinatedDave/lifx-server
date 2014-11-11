@@ -112,8 +112,8 @@ if Time.new.to_i > sunriseBegin
 	end
 end
 
-$schedule[$sunriseBegin] = [{light: 'all', color: 'yellow', repeat: 86400, duration: 1800}]
-$schedule[$sunsetBegin] = [{light: 'all', color: 'off', repeat: 86400, duration: 1800}]
+$schedule[sunriseBegin] = [{light: 'all', color: 'yellow', repeat: 86400, duration: 1800}]
+$schedule[sunsetBegin] = [{light: 'all', color: 'off', repeat: 86400, duration: 1800}]
 
 Thread.new do 
 	while true do

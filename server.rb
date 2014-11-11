@@ -4,6 +4,15 @@ require 'lifx'
 require 'JSON'
 
 set :port, 8999
+set :bind, '0.0.0.0'
+
+class Command
+   def initialize(id, name, addr)
+      @cust_id=id
+      @cust_name=name
+      @cust_addr=addr
+   end
+end
 
 $client = LIFX::Client.lan
 $client.discover!
@@ -50,12 +59,12 @@ get '/label/:name/:color' do
 end
 
 get '/schedule/:time/:light/:color' do
+end
 
+get '/schedule/:time/:light/:color' do
 end
 
 get '/color/:name/:hue/:sat/:bri/:kel' do 
-	503 if $COLORS.include? params[:name]
-
 	h = params[:hue].gsub(/[^\d\.]/, '').to_f
 	s = params[:sat].gsub(/[^\d\.]/, '').to_f
 	b = params[:bri].gsub(/[^\d\.]/, '').to_f
@@ -82,24 +91,48 @@ get '/after/:seconds/:label/:color' do
 	status 202
 end
 
-$schedule = Hash.new(false)
+$schedule = Hash.new([])
 
 $tick = Time.new.to_i
 
-$schedule[$tick] = {light: 'Front Room', color: 'blue'}
-$schedule[$tick + 1] = {light: 'Front Room', color: 'red'}
-$schedule[$tick + 2] = {light: 'Front Room', color: 'Front Room'}
+first = $client.lights.take(1).shift
+
+$schedule[$tick] = [{light: first.label, color: 'blue', repeat: 0, duration: 1}]
+$schedule[$tick + 1] = [{light: first.label, color: 'red', repeat: 5, duration: 0.5}]
+$schedule[$tick + 2] = [{light: first.label, color: first.label, repeat: 5, duration: 0.5}]
+
+sunriseBegin = Time.parse(Date.parse(Time.new.to_s).to_s + " 06:30:00").to_i
+sunsetBegin = Time.parse(Date.parse(Time.new.to_s).to_s + " 22:00:00").to_i
+
+if Time.new.to_i > sunriseBegin
+	sunriseBegin += 86400
+
+	if Time.new.to_i > sunsetBegin
+		sunsetBegin += 86400
+	end
+end
+
+$schedule[$sunriseBegin] = [{light: 'all', color: 'yellow', repeat: 86400, duration: 1800}]
+$schedule[$sunsetBegin] = [{light: 'all', color: 'off', repeat: 86400, duration: 1800}]
 
 Thread.new do 
 	while true do
-		if $schedule[$tick] != false
-			event = $schedule[$tick]
-			STDOUT.puts Time.at($tick).to_s + " <Scheduler> :: Set " + event[:light] + " light to " + event[:color]
-			selected = $client.lights
-			if event[:light] != 'all'
-				selected = [$client.lights.with_label(event[:light])]
+		if $schedule[$tick].size > 0
+			events = $schedule[$tick]
+			events.each do |event|
+				STDOUT.puts Time.at($tick).to_s + " <Scheduler> :: Set " + event[:light] + " light to " + event[:color]
+				selected = $client.lights
+				if event[:light] != 'all'
+					selected = [$client.lights.with_label(event[:light])]
+				end
+				setLight(event[:color], event[:duration], selected) 
+
+				# Are we repeating this?
+				if event[:repeat] > 0 
+					STDOUT.puts "Repeating event in " + event[:repeat].to_s + " seconds"
+					$schedule[$tick + event[:repeat]] += [event]
+				end
 			end
-			setLight(event[:color], 1, selected) 
 			$schedule.delete $tick
 		end
 		$tick += 1

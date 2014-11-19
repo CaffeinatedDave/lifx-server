@@ -1,17 +1,29 @@
 require 'rubygems'
 require 'sinatra'
 require 'lifx'
-require 'JSON'
+require 'json'
 
 set :port, 8999
 set :bind, '0.0.0.0'
 
 class Command
-   def initialize(id, name, addr)
-      @cust_id=id
-      @cust_name=name
-      @cust_addr=addr
-   end
+	attr_accessor :time, :light, :color, :duration, :repeat
+
+	def initialize(time, light, color, duration, repeat)
+		@time=time.to_i
+		@light=light
+		@color=color
+		@duration=duration.to_f
+		@repeat=repeat.to_i
+	end
+
+	def to_s
+		s = "Changing " + @light + " to " + @color + " over " + @duration.to_s + " seconds at " + Time.at(@time).to_s + "."	
+		if @repeat > 0 
+			s += " Repeating in " + @repeat.to_s + " seconds."
+		end
+		s
+	end
 end
 
 $client = LIFX::Client.lan
@@ -24,7 +36,7 @@ $COLORS = {
 	'blue' => LIFX::Color.blue.with_brightness(0.7),
 	'yellow' => LIFX::Color.yellow.with_brightness(0.7),
 	'purple' => LIFX::Color.purple.with_brightness(0.7),
-	'off' => LIFX::Color.hsbk(0, 0, 0, 2000),
+	'off' => LIFX::Color.hsb(0, 0, 0),
 }
 
 $client.lights.each do |l|
@@ -58,12 +70,6 @@ get '/label/:name/:color' do
 	status 200
 end
 
-get '/schedule/:time/:light/:color' do
-end
-
-get '/schedule/:time/:light/:color' do
-end
-
 get '/color/:name/:hue/:sat/:bri/:kel' do 
 	h = params[:hue].gsub(/[^\d\.]/, '').to_f
 	s = params[:sat].gsub(/[^\d\.]/, '').to_f
@@ -81,13 +87,30 @@ get '/color/:name' do
 	{hue: c.hue, saturation: c.saturation, brightness: c.brightness, kelvin: c.kelvin}.to_json
 end
 
+get '/color' do 
+	content_type :json
+	$COLORS.to_json
+end
+
 get '/schedule' do
 	{timeNow: Time.new.to_s, serverTick: Time.at($tick).to_s, schedule: $schedule}.to_json
 end
 
-get '/after/:seconds/:label/:color' do
+get '/after/:seconds/:label/:color/:duration/:repeat' do
 	time = Time.new.to_i + params[:seconds].to_i
-	$schedule[time] = {light: params[:label], color: params[:color]}
+	$schedule[time] += [Command.new(time, params[:label], params[:color], params[:duration], params[:repeat])]
+	status 202
+end
+
+get '/after/:seconds/:label/:color/:duration/' do
+	time = Time.new.to_i + params[:seconds].to_i
+	$schedule[time] += [Command.new(time, params[:label], params[:color], params[:duration], 0)]
+	status 202
+end
+
+get '/after/:seconds/:label/:color/' do
+	time = Time.new.to_i + params[:seconds].to_i
+	$schedule[time] += [Command.new(time, params[:label], params[:color], 0, 0)]
 	status 202
 end
 
@@ -95,14 +118,8 @@ $schedule = Hash.new([])
 
 $tick = Time.new.to_i
 
-first = $client.lights.take(1).shift
-
-$schedule[$tick] = [{light: first.label, color: 'blue', repeat: 0, duration: 1}]
-$schedule[$tick + 1] = [{light: first.label, color: 'red', repeat: 5, duration: 0.5}]
-$schedule[$tick + 2] = [{light: first.label, color: first.label, repeat: 5, duration: 0.5}]
-
-sunriseBegin = Time.parse(Date.parse(Time.new.to_s).to_s + " 06:30:00").to_i
-sunsetBegin = Time.parse(Date.parse(Time.new.to_s).to_s + " 22:00:00").to_i
+sunriseBegin = Time.parse(Date.parse(Time.new.to_s).to_s + " 06:15:00").to_i
+sunsetBegin = Time.parse(Date.parse(Time.new.to_s).to_s + " 22:30:00").to_i
 
 if Time.new.to_i > sunriseBegin
 	sunriseBegin += 86400
@@ -112,30 +129,35 @@ if Time.new.to_i > sunriseBegin
 	end
 end
 
-$schedule[sunriseBegin] = [{light: 'all', color: 'yellow', repeat: 86400, duration: 1800}]
-$schedule[sunsetBegin] = [{light: 'all', color: 'off', repeat: 86400, duration: 1800}]
+$schedule[sunriseBegin] = [Command.new(sunriseBegin, 'all', 'yellow', 86400,  1800)]
+$schedule[sunsetBegin] = [Command.new(sunsetBegin, 'all', 'off', 86400, 1800)]
 
 Thread.new do 
 	while true do
-		if $schedule[$tick].size > 0
-			events = $schedule[$tick]
-			events.each do |event|
-				STDOUT.puts Time.at($tick).to_s + " <Scheduler> :: Set " + event[:light] + " light to " + event[:color]
-				selected = $client.lights
-				if event[:light] != 'all'
-					selected = [$client.lights.with_label(event[:light])]
-				end
-				setLight(event[:color], event[:duration], selected) 
+		while $tick < Time.now.to_i do
+			if $schedule[$tick].size > 0
+				events = $schedule[$tick]
 
-				# Are we repeating this?
-				if event[:repeat] > 0 
-					STDOUT.puts "Repeating event in " + event[:repeat].to_s + " seconds"
-					$schedule[$tick + event[:repeat]] += [event]
+				events.each do |event|
+					STDOUT.puts "<Scheduler> :: " + event.to_s 
+
+					selected = nil 
+					if event.light != 'all'
+						selected = [$client.lights.with_label(event.light)]
+					end
+					setLight(event.color, event.duration.to_f, selected) 
+	
+					# Are we repeating this?
+					if event.repeat > 0 
+						STDOUT.puts "Repeating event in " + event.repeat.to_s + " seconds"
+						nextEvent = Command.new($tick + event.repeat, event.light, event.color, event.duration, event.repeat)
+						$schedule[$tick + event.repeat] += [nextEvent]
+					end
 				end
+				$schedule.delete $tick
 			end
-			$schedule.delete $tick
+			$tick += 1
 		end
-		$tick += 1
 		sleep 1
 	end
 end

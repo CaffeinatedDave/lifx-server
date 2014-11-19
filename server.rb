@@ -129,8 +129,8 @@ if Time.new.to_i > sunriseBegin
 	end
 end
 
-$schedule[sunriseBegin] = [Command.new(sunriseBegin, 'all', 'yellow', 86400,  1800)]
-$schedule[sunsetBegin] = [Command.new(sunsetBegin, 'all', 'off', 86400, 1800)]
+$schedule[sunriseBegin] = [Command.new(sunriseBegin, 'all', 'yellow', 1800, 86400)]
+$schedule[sunsetBegin] = [Command.new(sunsetBegin, 'all', 'off', 1800, 86400)]
 
 Thread.new do 
 	while true do
